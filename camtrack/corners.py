@@ -62,6 +62,7 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         corner_positions_0,
         np.array([5] * last_id)
     )
+    builder.set_corners_at_frame(0, corners_0)
 
     for frame, image_1 in enumerate(frame_sequence[1:], 1):
         image_0_conv, image_1_conv = np.uint8(image_0 * 255), np.uint8(image_1 * 255)
