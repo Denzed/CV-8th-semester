@@ -33,7 +33,7 @@ class _CornerStorageBuilder:
         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
     )
 
-    corner_discovery_window = 6
+    corner_discovery_window = 1
 
     def __init__(self, progress_indicator=None):
         self._progress_indicator = progress_indicator
@@ -46,6 +46,10 @@ class _CornerStorageBuilder:
 
     def build_corner_storage(self):
         return StorageImpl(item[1] for item in sorted(self._corners.items()))
+
+
+def are_near(a, b, diff_threshold):
+    return abs(a - b).reshape(-1, 2).max(-1) < diff_threshold
 
 
 def _build_impl(frame_sequence: pims.FramesSequence,
@@ -66,16 +70,16 @@ def _build_impl(frame_sequence: pims.FramesSequence,
 
     for frame, image_1 in enumerate(frame_sequence[1:], 1):
         image_0_conv, image_1_conv = np.uint8(image_0 * 255), np.uint8(image_1 * 255)
-        corner_positions_1, _, _ = cv2.calcOpticalFlowPyrLK(
+        corner_positions_1, status_1, _ = cv2.calcOpticalFlowPyrLK(
             image_0_conv, image_1_conv, corners_0.points, None,
             **_CornerStorageBuilder.lucas_kanade_args
         )
-        corner_positions_0, _, _ = cv2.calcOpticalFlowPyrLK(
+        corner_positions_0, status_0, _ = cv2.calcOpticalFlowPyrLK(
             image_1_conv, image_0_conv, corner_positions_1, None,
             **_CornerStorageBuilder.lucas_kanade_args
         )
 
-        found = abs(corners_0.points - corner_positions_0).reshape(-1, 2).max(-1) < 1
+        found = are_near(corners_0.points, corner_positions_0, 1) * (1 == np.concatenate(status_0 * status_1))
 
         corners_1 = FrameCorners(
             corners_0.ids[found],
