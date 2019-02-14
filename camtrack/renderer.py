@@ -169,6 +169,15 @@ class CameraTrackRenderer:
         """
         self._load_camera_model(cam_model_files)
 
+        self._fbo = GL.glGenFramebuffers(1)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
+        GL.glFramebufferTexture2D(
+            GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0, GL.GL_TEXTURE_2D,
+            self._camera_model_tex, 0
+        )
+        GL.glDrawBuffer(GL.GL_COLOR_ATTACHMENT0)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+
         self._camera_track = tracked_cam_track
         self._camera_params = tracked_cam_parameters
 
@@ -233,6 +242,11 @@ class CameraTrackRenderer:
         image_data = cv2.imread(cam_model_files[1])
         height, width, _ = image_data.shape
 
+        self._camera_model_texture_size = (width, height)
+        self._camera_screen_coords = np.array([
+            (0.113281 * width, 0.0313 * height), (0.28125 * width, 0.1485 * height)
+        ], dtype=np.int)
+
         GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_model_tex)
         GL.glTexParameterf(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
@@ -282,7 +296,11 @@ class CameraTrackRenderer:
         self._render_cam_frustum(mvp * tracked_cam_mv * np.linalg.inv(tracked_cam_p))
         self._render_points(mvp)
         self._render_cam_track(mvp)
-        self._render_cam_model(mvp * tracked_cam_mv)
+
+        screen_mvp = _setup_projection(
+            self._camera_params.fov_y, self._camera_params.aspect_ratio, 0.1, 50
+        ) * _setup_view(-tracked_cam_pose.t_vec, tracked_cam_pose.r_mat) * _opencv_to_opengl
+        self._render_cam_model(mvp * tracked_cam_mv, screen_mvp)
 
         GLUT.glutSwapBuffers()
 
@@ -364,7 +382,20 @@ class CameraTrackRenderer:
 
         shaders.glUseProgram(0)
 
-    def _render_cam_model(self, mvp):
+    def _render_cam_model(self, mvp, screen_mvp):
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
+        screen_x0, screen_y0, screen_w, screen_h = (
+            self._camera_screen_coords[0][0],
+            self._camera_screen_coords[0][1],
+            self._camera_screen_coords[1][0] - self._camera_screen_coords[0][0],
+            self._camera_screen_coords[1][1] - self._camera_screen_coords[0][1]
+        )
+        GL.glViewport(screen_x0, screen_y0, screen_w, screen_h)
+        self._render_points(screen_mvp)
+
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        GL.glViewport(0, 0, GLUT.glutGet(GLUT.GLUT_WINDOW_WIDTH), GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT))
+
         shaders.glUseProgram(self._textured_program)
 
         GL.glUniformMatrix4fv(
