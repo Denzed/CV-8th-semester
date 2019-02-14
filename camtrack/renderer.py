@@ -223,9 +223,8 @@ class CameraTrackRenderer:
         self._camera_track = tracked_cam_track
         self._camera_params = tracked_cam_parameters
 
-        self._camera_track_buffer = vbo.VBO(
-            np.array([pose.t_vec for pose in tracked_cam_track], dtype=np.float32)
-        )
+        poses = [pose.t_vec for pose in tracked_cam_track]
+        self._camera_track_buffer = vbo.VBO(np.array(list(zip(poses, poses[1:])), dtype=np.float32))
 
         pyramid = [
             [[-1, -1, -1], [-1, 1, -1], [1, 1, -1], [1, -1, -1]],
@@ -352,7 +351,7 @@ class CameraTrackRenderer:
         point_color_in=('_point_colors_buffer', 3, GL.GL_FLOAT)
     )
     def _render_points(self, mvp):
-        GL.glDrawArrays(GL.GL_POINTS, 0, self._point_colors_buffer.size)
+        GL.glDrawArrays(GL.GL_POINTS, 0, self._point_colors_buffer.size // 4)
 
     @uses_program(
         '_uncolored_program',
@@ -365,7 +364,7 @@ class CameraTrackRenderer:
             1.0, 1.0, 1.0
         )
 
-        GL.glDrawArrays(GL.GL_LINE_STRIP, 0, self._camera_track_buffer.size)
+        GL.glDrawArrays(GL.GL_LINES, 0, self._camera_track_buffer.size // 4)
 
     @uses_program(
         '_uncolored_program',
@@ -378,7 +377,7 @@ class CameraTrackRenderer:
             1.0, 1.0, 0.0
         )
 
-        GL.glDrawArrays(GL.GL_LINES, 0, self._camera_pyramid_buffer.size)
+        GL.glDrawArrays(GL.GL_LINES, 0, self._camera_pyramid_buffer.size // 4)
 
     @uses_program(
         '_textured_program',
@@ -391,7 +390,7 @@ class CameraTrackRenderer:
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_model_tex)
         GL.glUniform1i(GL.glGetUniformLocation(self._textured_program, 'tex'), 0)
 
-        GL.glDrawArrays(GL.GL_TRIANGLES, 0, self._camera_model_vertices_buffer.size)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, self._camera_model_vertices_buffer.size // 4)
 
     def _render_cam(self, mvp, screen_mvp):
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
