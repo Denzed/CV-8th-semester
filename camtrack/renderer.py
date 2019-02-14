@@ -4,7 +4,6 @@ __all__ = [
     'CameraTrackRenderer'
 ]
 
-from collections import defaultdict
 from typing import List, Tuple
 
 import cv2
@@ -46,7 +45,6 @@ def uses_program(prog_name, setup_mvp, **used_buffer_info):
 
             result = f(self, *args, **kwargs)
 
-
             for (loc, buffer, _, _) in reversed(buffers):
                 GL.glDisableVertexAttribArray(loc)
                 buffer.unbind()
@@ -58,12 +56,46 @@ def uses_program(prog_name, setup_mvp, **used_buffer_info):
         return wrapper
     return _uses_program
 
+
 _opencv_to_opengl = np.mat([
     [1, 0, 0, 0],
     [0, -1, 0, 0],
     [0, 0, -1, 0],
     [0, 0, 0, 1]
 ], dtype=np.float32)
+
+
+def slerp(v0, v1, t):
+    v0 = np.array(v0)
+    v1 = np.array(v1)
+    dot = np.sum(v0 * v1)
+
+    if dot < 0.0:
+        v1 = -v1
+        dot = -dot
+
+    DOT_THRESHOLD = 0.9995
+    if dot > DOT_THRESHOLD:
+        result = v0[np.newaxis, :] + t * (v1 - v0)[np.newaxis, :]
+        result = result / np.linalg.norm(result)
+        return result
+
+    theta_0 = np.arccos(dot)
+    sin_theta_0 = np.sin(theta_0)
+
+    theta = theta_0 * t
+    sin_theta = np.sin(theta)
+
+    s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
+    s1 = sin_theta / sin_theta_0
+    return (s0[:, np.newaxis] * v0[np.newaxis, :]) + (s1[:, np.newaxis] * v1[np.newaxis, :])
+
+
+def _interpolate_cam_pose(t: float, p0: data3d.Pose, p1: data3d.Pose):
+    return data3d.Pose(
+        slerp(p0.r_mat, p1.r_mat, t),
+        p0.t_vec * (1 - t) + p1.t_vec * t
+    )
 
 
 def _setup_projection(fov_y, aspect_ratio, z_near, z_far):
@@ -313,9 +345,13 @@ class CameraTrackRenderer:
         model and frustrum should be drawn (see tracked_cam_track_pos for basic task)
         :return: returns nothing
         """
-        # a frame in which a tracked camera model and frustrum should be drawn
-        # without interpolation
         tracked_cam_track_pos = int(tracked_cam_track_pos_float)
+        tracked_cam_t = tracked_cam_track_pos_float - tracked_cam_track_pos
+        self._camera_track.append(self._camera_track[-1])
+        tracked_cam_pose = _interpolate_cam_pose(
+            tracked_cam_t,
+            *self._camera_track[tracked_cam_track_pos:tracked_cam_track_pos + 2]
+        )
 
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
 
@@ -324,8 +360,6 @@ class CameraTrackRenderer:
         mvp = _setup_projection(camera_fov_y, aspect_ratio, 0.1, 100) * \
             _setup_view(-camera_tr_vec, camera_rot_mat) * \
             _opencv_to_opengl
-
-        tracked_cam_pose = self._camera_track[tracked_cam_track_pos]
 
         tracked_cam_mv = _setup_view(tracked_cam_pose.t_vec, -tracked_cam_pose.r_mat)
         tracked_cam_p = _setup_projection(
