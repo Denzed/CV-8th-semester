@@ -16,6 +16,48 @@ from OpenGL.arrays import vbo
 
 import data3d
 
+
+def uses_program(prog_name, setup_mvp, **used_buffer_info):
+    def _uses_program(f):
+        def wrapper(self, *args, **kwargs):
+            program = getattr(self, prog_name)
+            shaders.glUseProgram(program)
+
+            if setup_mvp:
+                GL.glUniformMatrix4fv(
+                    GL.glGetUniformLocation(program, 'mvp'), 1, True,
+                    kwargs['mvp'] if 'mvp' in kwargs else args[0]
+                )
+
+            buffers = []
+
+            for (name, (buff_name, cnt, typ)) in used_buffer_info.items():
+                buffers.append((
+                    GL.glGetAttribLocation(program, name),
+                    getattr(self, buff_name),
+                    cnt,
+                    typ
+                ))
+
+            for (loc, buffer, cnt, typ) in buffers:
+                buffer.bind()
+                GL.glEnableVertexAttribArray(loc)
+                GL.glVertexAttribPointer(loc, cnt, typ, False, 0, buffer)
+
+            result = f(self, *args, **kwargs)
+
+
+            for (loc, buffer, _, _) in reversed(buffers):
+                GL.glDisableVertexAttribArray(loc)
+                buffer.unbind()
+
+            shaders.glUseProgram(0)
+
+            return result
+
+        return wrapper
+    return _uses_program
+
 _opencv_to_opengl = np.mat([
     [1, 0, 0, 0],
     [0, -1, 0, 0],
@@ -259,7 +301,6 @@ class CameraTrackRenderer:
         )
         GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
 
-
     def display(self, camera_tr_vec, camera_rot_mat, camera_fov_y, tracked_cam_track_pos_float):
         """
         Draw everything with specified render camera position, projection parameters and 
@@ -282,8 +323,8 @@ class CameraTrackRenderer:
         aspect_ratio = GLUT.glutGet(GLUT.GLUT_WINDOW_WIDTH) / GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT)
 
         mvp = _setup_projection(camera_fov_y, aspect_ratio, 0.1, 100) * \
-              _setup_view(-camera_tr_vec, camera_rot_mat) * \
-              _opencv_to_opengl
+            _setup_view(-camera_tr_vec, camera_rot_mat) * \
+            _opencv_to_opengl
 
         tracked_cam_pose = self._camera_track[tracked_cam_track_pos]
 
@@ -300,89 +341,59 @@ class CameraTrackRenderer:
         screen_mvp = _setup_projection(
             self._camera_params.fov_y, self._camera_params.aspect_ratio, 0.1, 50
         ) * _setup_view(-tracked_cam_pose.t_vec, tracked_cam_pose.r_mat) * _opencv_to_opengl
-        self._render_cam_model(mvp * tracked_cam_mv, screen_mvp)
+        self._render_cam(mvp * tracked_cam_mv, screen_mvp)
 
         GLUT.glutSwapBuffers()
 
+    @uses_program(
+        '_colored_program',
+        True,
+        point_position=('_point_positions_buffer', 3, GL.GL_FLOAT),
+        point_color_in=('_point_colors_buffer', 3, GL.GL_FLOAT)
+    )
     def _render_points(self, mvp):
-        shaders.glUseProgram(self._colored_program)
-
-        GL.glUniformMatrix4fv(
-            GL.glGetUniformLocation(self._colored_program, 'mvp'),
-            1, True, mvp)
-
-        self._point_positions_buffer.bind()
-        loc_pos = GL.glGetAttribLocation(self._colored_program, 'point_position')
-        GL.glEnableVertexAttribArray(loc_pos)
-        GL.glVertexAttribPointer(loc_pos, 3, GL.GL_FLOAT, False, 0, self._point_positions_buffer)
-
-        self._point_colors_buffer.bind()
-        loc_color = GL.glGetAttribLocation(self._colored_program, 'point_color_in')
-        GL.glEnableVertexAttribArray(loc_color)
-        GL.glVertexAttribPointer(loc_color, 3, GL.GL_FLOAT, False, 0, self._point_colors_buffer)
-
         GL.glDrawArrays(GL.GL_POINTS, 0, self._point_colors_buffer.size)
 
-        GL.glDisableVertexAttribArray(loc_color)
-        GL.glDisableVertexAttribArray(loc_pos)
-
-        self._point_colors_buffer.unbind()
-        self._point_positions_buffer.unbind()
-
-        shaders.glUseProgram(0)
-
+    @uses_program(
+        '_uncolored_program',
+        True,
+        position=('_camera_track_buffer', 3, GL.GL_FLOAT)
+    )
     def _render_cam_track(self, mvp):
-        shaders.glUseProgram(self._uncolored_program)
-
-        GL.glUniformMatrix4fv(
-            GL.glGetUniformLocation(self._uncolored_program, 'mvp'),
-            1, True, mvp)
-
         GL.glUniform3f(
             GL.glGetUniformLocation(self._uncolored_program, 'fixed_color'),
             1.0, 1.0, 1.0
         )
 
-        self._camera_track_buffer.bind()
-        loc_pos = GL.glGetAttribLocation(self._uncolored_program, 'position')
-        GL.glEnableVertexAttribArray(loc_pos)
-        GL.glVertexAttribPointer(loc_pos, 3, GL.GL_FLOAT, False, 0, self._camera_track_buffer)
-
         GL.glDrawArrays(GL.GL_LINE_STRIP, 0, self._camera_track_buffer.size)
 
-        GL.glDisableVertexAttribArray(loc_pos)
-
-        self._camera_track_buffer.unbind()
-
-        shaders.glUseProgram(0)
-
+    @uses_program(
+        '_uncolored_program',
+        True,
+        position=('_camera_pyramid_buffer', 3, GL.GL_FLOAT)
+    )
     def _render_cam_frustum(self, mvp):
-        shaders.glUseProgram(self._uncolored_program)
-
-        GL.glUniformMatrix4fv(
-            GL.glGetUniformLocation(self._uncolored_program, 'mvp'),
-            1, True, mvp
-        )
-
         GL.glUniform3f(
             GL.glGetUniformLocation(self._uncolored_program, 'fixed_color'),
             1.0, 1.0, 0.0
         )
 
-        self._camera_pyramid_buffer.bind()
-        loc_pos = GL.glGetAttribLocation(self._uncolored_program, 'position')
-        GL.glEnableVertexAttribArray(loc_pos)
-        GL.glVertexAttribPointer(loc_pos, 3, GL.GL_FLOAT, False, 0, self._camera_pyramid_buffer)
-
         GL.glDrawArrays(GL.GL_LINES, 0, self._camera_pyramid_buffer.size)
 
-        GL.glDisableVertexAttribArray(loc_pos)
+    @uses_program(
+        '_textured_program',
+        True,
+        point_position=('_camera_model_vertices_buffer', 3, GL.GL_FLOAT),
+        point_texcoords=('_camera_model_texcoords_buffer', 2, GL.GL_FLOAT)
+    )
+    def _render_cam_model(self, mvp):
+        GL.glActiveTexture(GL.GL_TEXTURE0)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_model_tex)
+        GL.glUniform1i(GL.glGetUniformLocation(self._textured_program, 'tex'), 0)
 
-        self._camera_pyramid_buffer.unbind()
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, self._camera_model_vertices_buffer.size)
 
-        shaders.glUseProgram(0)
-
-    def _render_cam_model(self, mvp, screen_mvp):
+    def _render_cam(self, mvp, screen_mvp):
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
         screen_x0, screen_y0, screen_w, screen_h = (
             self._camera_screen_coords[0][0],
@@ -391,37 +402,15 @@ class CameraTrackRenderer:
             self._camera_screen_coords[1][1] - self._camera_screen_coords[0][1]
         )
         GL.glViewport(screen_x0, screen_y0, screen_w, screen_h)
+
+        GL.glEnable(GL.GL_SCISSOR_TEST)  # clearing camera screen from previous drawings
+        GL.glScissor(screen_x0, screen_y0, screen_w, screen_h)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDisable(GL.GL_SCISSOR_TEST)
+
         self._render_points(screen_mvp)
 
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
         GL.glViewport(0, 0, GLUT.glutGet(GLUT.GLUT_WINDOW_WIDTH), GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT))
 
-        shaders.glUseProgram(self._textured_program)
-
-        GL.glUniformMatrix4fv(
-            GL.glGetUniformLocation(self._textured_program, 'mvp'),
-            1, True, mvp)
-
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, self._camera_model_tex)
-        GL.glUniform1i(GL.glGetUniformLocation(self._textured_program, 'tex'), 0)
-
-        self._camera_model_vertices_buffer.bind()
-        loc_pos = GL.glGetAttribLocation(self._textured_program, 'point_position')
-        GL.glEnableVertexAttribArray(loc_pos)
-        GL.glVertexAttribPointer(loc_pos, 3, GL.GL_FLOAT, False, 0, self._camera_model_vertices_buffer)
-
-        self._camera_model_texcoords_buffer.bind()
-        loc_color = GL.glGetAttribLocation(self._textured_program, 'point_texcoords')
-        GL.glEnableVertexAttribArray(loc_color)
-        GL.glVertexAttribPointer(loc_color, 2, GL.GL_FLOAT, False, 0, self._camera_model_texcoords_buffer)
-
-        GL.glDrawArrays(GL.GL_TRIANGLES, 0, self._camera_model_vertices_buffer.size)
-
-        GL.glDisableVertexAttribArray(loc_color)
-        GL.glDisableVertexAttribArray(loc_pos)
-
-        self._camera_model_texcoords_buffer.unbind()
-        self._camera_model_vertices_buffer.unbind()
-
-        shaders.glUseProgram(0)
+        self._render_cam_model(mvp)
