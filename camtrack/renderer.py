@@ -117,105 +117,58 @@ def _setup_view(translation, rotation):
     ]), dtype=np.float32)
 
 
-def _build_colored_program():
+def _build_general_program(*defines):
+    defines = ''.join(map(lambda d: f'#define {d}\n', defines))
+
     vertex_shader = shaders.compileShader(  # 1.40 not supported on my PC ;(
-        """
+        f"""
         #version 130
+        {defines}
+
         uniform mat4 mvp;
 
         in vec3 point_position;
+
+        #if defined(COLORED_POINTS)
         in vec3 point_color_in;
-
         out vec3 point_color;
-
-        void main() {
-            gl_Position = mvp * vec4(point_position, 1.0);
-
-            point_color = point_color_in;
-        }""",
-        GL.GL_VERTEX_SHADER
-    )
-    fragment_shader = shaders.compileShader(
-        """
-        #version 130
-        in vec3 point_color;
-
-        out vec3 out_color;
-
-        void main() {
-            out_color = point_color;
-        }""",
-        GL.GL_FRAGMENT_SHADER
-    )
-
-    return shaders.compileProgram(
-        vertex_shader, fragment_shader
-    )
-
-
-def _build_uncolored_program():
-    vertex_shader = shaders.compileShader(
-        """
-        #version 130
-        uniform mat4 mvp;
-
-        in vec3 position;
-        
-        void main() {
-            vec4 camera_space_position = mvp * vec4(position, 1.0);
-            gl_Position = camera_space_position;
-        }""",
-        GL.GL_VERTEX_SHADER
-    )
-    fragment_shader = shaders.compileShader(
-        """
-        #version 130
-        uniform vec3 fixed_color;
-        
-        out vec3 out_color;
-
-        void main() {
-            out_color = fixed_color;
-        }""",
-        GL.GL_FRAGMENT_SHADER
-    )
-
-    return shaders.compileProgram(
-        vertex_shader, fragment_shader
-    )
-
-
-def _build_textured_program():
-    vertex_shader = shaders.compileShader(
-        """
-        #version 130
-        uniform mat4 mvp;
-
-        in vec3 point_position;
+        #elif defined(WITH_TEXTURE)
         in vec2 point_texcoords;
-        
         out vec2 uv;
-        
-        void main() {
-            vec4 camera_space_position = mvp * vec4(point_position, 1.0);
-            gl_Position = camera_space_position;
+        #endif
+
+        void main() {{
+            gl_Position = mvp * vec4(point_position, 1.0);
+            
+            #if defined(COLORED_POINTS)
+            point_color = point_color_in;
+            #elif defined(WITH_TEXTURE)
             uv = point_texcoords;
-        }""",
+            #endif
+        }}""",
         GL.GL_VERTEX_SHADER
     )
     fragment_shader = shaders.compileShader(
-        """
+        f"""
         #version 130
         
+        {defines}
+        
+        #if defined(COLORED_POINTS)
+        in vec3 point_color;
+        #elif defined(FIXED_COLOR)
+        uniform vec3 point_color;        
+        #elif defined(WITH_TEXTURE)
         uniform sampler2D tex;
-        
         in vec2 uv;
-        
+        #define point_color texture(tex, uv).rgb        
+        #endif
+
         out vec3 out_color;
 
-        void main() {
-            out_color = texture(tex, uv).rgb;
-        }""",
+        void main() {{
+            out_color = point_color;
+        }}""",
         GL.GL_FRAGMENT_SHADER
     )
 
@@ -283,9 +236,9 @@ class CameraTrackRenderer:
         self._point_positions_buffer = vbo.VBO(np.array(point_cloud.points, dtype=np.float32))
         self._point_colors_buffer = vbo.VBO(np.array(point_cloud.colors, dtype=np.float32))
 
-        self._colored_program = _build_colored_program()
-        self._uncolored_program = _build_uncolored_program()
-        self._textured_program = _build_textured_program()
+        self._colored_program = _build_general_program('COLORED_POINTS')
+        self._uncolored_program = _build_general_program('FIXED_COLOR')
+        self._textured_program = _build_general_program('WITH_TEXTURE')
 
         GLUT.glutInitDisplayMode(GLUT.GLUT_RGBA | GLUT.GLUT_DOUBLE | GLUT.GLUT_DEPTH)
         GL.glEnable(GL.GL_DEPTH_TEST)
@@ -390,11 +343,11 @@ class CameraTrackRenderer:
     @uses_program(
         '_uncolored_program',
         True,
-        position=('_camera_track_buffer', 3, GL.GL_FLOAT)
+        point_position=('_camera_track_buffer', 3, GL.GL_FLOAT)
     )
     def _render_cam_track(self, mvp):
         GL.glUniform3f(
-            GL.glGetUniformLocation(self._uncolored_program, 'fixed_color'),
+            GL.glGetUniformLocation(self._uncolored_program, 'point_color'),
             1.0, 1.0, 1.0
         )
 
@@ -403,11 +356,11 @@ class CameraTrackRenderer:
     @uses_program(
         '_uncolored_program',
         True,
-        position=('_camera_pyramid_buffer', 3, GL.GL_FLOAT)
+        point_position=('_camera_pyramid_buffer', 3, GL.GL_FLOAT)
     )
     def _render_cam_frustum(self, mvp):
         GL.glUniform3f(
-            GL.glGetUniformLocation(self._uncolored_program, 'fixed_color'),
+            GL.glGetUniformLocation(self._uncolored_program, 'point_color'),
             1.0, 1.0, 0.0
         )
 
