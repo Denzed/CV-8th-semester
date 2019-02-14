@@ -6,6 +6,7 @@ numpy
 opencv-python
 pims
 PyOpenGL
+pyquaternion
 recordclass
 scipy
 transforms3d

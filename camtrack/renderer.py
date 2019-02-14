@@ -8,6 +8,7 @@ from typing import List, Tuple
 
 import cv2
 import numpy as np
+from pyquaternion import Quaternion
 from OpenGL import GL
 from OpenGL import GLUT
 from OpenGL.GL import shaders
@@ -65,35 +66,18 @@ _opencv_to_opengl = np.mat([
 ], dtype=np.float32)
 
 
-def slerp(v0, v1, t):
-    v0 = np.array(v0)
-    v1 = np.array(v1)
-    dot = np.sum(v0 * v1)
-
-    if dot < 0.0:
-        v1 = -v1
-        dot = -dot
-
-    DOT_THRESHOLD = 0.9995
-    if dot > DOT_THRESHOLD:
-        result = v0[np.newaxis, :] + t * (v1 - v0)[np.newaxis, :]
-        result = result / np.linalg.norm(result)
-        return result
-
-    theta_0 = np.arccos(dot)
-    sin_theta_0 = np.sin(theta_0)
-
-    theta = theta_0 * t
-    sin_theta = np.sin(theta)
-
-    s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
-    s1 = sin_theta / sin_theta_0
-    return (s0[:, np.newaxis] * v0[np.newaxis, :]) + (s1[:, np.newaxis] * v1[np.newaxis, :])
-
-
 def _interpolate_cam_pose(t: float, p0: data3d.Pose, p1: data3d.Pose):
+    def to_quat(m):
+        qr = np.sqrt(1 + m[0][0] + m[1][1] + m[2][2]) / 2
+        return Quaternion(np.array([
+            qr,
+            (m[2][1] - m[1][2]) / 4 / qr,
+            (m[0][2] - m[2][0]) / 4 / qr,
+            (m[1][0] - m[0][1]) / 4 / qr
+        ]))
+
     return data3d.Pose(
-        slerp(p0.r_mat, p1.r_mat, t),
+        Quaternion.slerp(to_quat(p0.r_mat), to_quat(p1.r_mat), t).rotation_matrix,
         p0.t_vec * (1 - t) + p1.t_vec * t
     )
 
