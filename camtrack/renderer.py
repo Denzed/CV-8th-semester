@@ -59,16 +59,12 @@ def uses_program(prog_name, setup_mvp, **used_buffer_info):
     return _uses_program
 
 
-_opencv_opengl_3 = np.array([
-    [1, 0, 0],
-    [0, -1, 0],
-    [0, 0, -1],
-], dtype=np.float32)
-
-_opencv_opengl_4 = np.block([
-    [_opencv_opengl_3, np.zeros((3, 1), dtype=np.float32)],
-    [np.zeros(3, dtype=np.float32), 1]
-])
+_opencv_opengl_transform = np.array([
+    [1, 0, 0, 0],
+    [0, -1, 0, 0],
+    [0, 0, -1, 0],
+    [0, 0, 0, 1]
+]).astype(np.float32)
 
 
 def _interpolate_cam_pose(t: float, p0: data3d.Pose, p1: data3d.Pose):
@@ -82,7 +78,7 @@ def _interpolate_cam_pose(t: float, p0: data3d.Pose, p1: data3d.Pose):
         ]))
 
     return data3d.Pose(
-        Quaternion.slerp(to_quat(p0.r_mat), to_quat(p1.r_mat), t).rotation_matrix,
+        Quaternion.slerp(to_quat(p0.r_mat), to_quat(p1.r_mat), t).rotation_matrix.astype(np.float32),
         p0.t_vec * (1 - t) + p1.t_vec * t
     )
 
@@ -100,10 +96,10 @@ def _setup_projection(fov_y, aspect_ratio, z_near, z_far):
 
 
 def _setup_view(translation, rotation):
-    return np.array(np.block([
+    return np.block([
         [rotation, translation[np.newaxis].transpose()],
         [0, 0, 0, 1]
-    ]), dtype=np.float32)
+    ]).astype(np.float32)
 
 
 def _build_general_program(*defines):
@@ -300,25 +296,24 @@ class CameraTrackRenderer:
         aspect_ratio = GLUT.glutGet(GLUT.GLUT_WINDOW_WIDTH) / GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT)
 
         mvp = _setup_projection(camera_fov_y, aspect_ratio, 0.1, 100) @ \
-            np.linalg.inv(_setup_view(camera_tr_vec, camera_rot_mat)) @ \
-            _opencv_opengl_4
-        # view is inverted, because rotation around camera is more intuitive
+            _opencv_opengl_transform @ \
+            np.linalg.inv(_setup_view(camera_tr_vec, camera_rot_mat))
 
-        tracked_cam_mv = _setup_view(tracked_cam_pose.t_vec, tracked_cam_pose.r_mat)
         tracked_cam_p = _setup_projection(
             self._camera_params.fov_y, self._camera_params.aspect_ratio,
             0.1, 50
         )
+        tracked_cam_mv = _setup_view(tracked_cam_pose.t_vec, tracked_cam_pose.r_mat)
+        tracked_cam_mvp = tracked_cam_p @ _opencv_opengl_transform @ np.linalg.inv(tracked_cam_mv)
 
-        # self._render_cam_frustum(
-        #     mvp @ np.linalg.inv(tracked_cam_p @ tracked_cam_mv @ _opencv_opengl_4)
-        # )
+        self._render_cam_frustum(
+            mvp @ tracked_cam_mv @ _opencv_opengl_transform @ np.linalg.inv(tracked_cam_p)
+        )
         self._render_points(mvp)
         self._render_cam_track(mvp)
-
         self._render_cam(
-            mvp @ _opencv_opengl_4 @ _setup_view(np.zeros(3, dtype=np.float32), tracked_cam_pose.r_mat) @ _opencv_opengl_4,
-            np.eye(4)
+            mvp @ tracked_cam_mv @ _opencv_opengl_transform,
+            tracked_cam_mvp
         )
 
         GLUT.glutSwapBuffers()
