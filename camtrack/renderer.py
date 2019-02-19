@@ -117,6 +117,7 @@ def _build_general_program(*defines):
         #if defined(COLORED_POINTS)
         in vec3 point_color_in;
         out vec3 point_color;
+        const float base_size = 10;
         #elif defined(WITH_TEXTURE)
         in vec2 point_texcoords;
         out vec2 uv;
@@ -127,6 +128,7 @@ def _build_general_program(*defines):
             
             #if defined(COLORED_POINTS)
             point_color = point_color_in;
+            gl_PointSize = base_size / gl_Position.w;
             #elif defined(WITH_TEXTURE)
             uv = point_texcoords;
             #endif
@@ -151,7 +153,7 @@ def _build_general_program(*defines):
 
         out vec3 out_color;
 
-        void main() {{
+        void main() {{ 
             out_color = point_color;
         }}""",
         GL.GL_FRAGMENT_SHADER
@@ -327,7 +329,9 @@ class CameraTrackRenderer:
         point_color_in=('_point_colors_buffer', 3, GL.GL_FLOAT)
     )
     def _render_points(self, mvp):
+        GL.glEnable(GL.GL_VERTEX_PROGRAM_POINT_SIZE)
         GL.glDrawArrays(GL.GL_POINTS, 0, self._point_colors_buffer.size // 12)
+        GL.glDisable(GL.GL_VERTEX_PROGRAM_POINT_SIZE)
 
     @uses_program(
         '_uncolored_program',
