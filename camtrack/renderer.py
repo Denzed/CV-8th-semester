@@ -296,24 +296,26 @@ class CameraTrackRenderer:
         aspect_ratio = GLUT.glutGet(GLUT.GLUT_WINDOW_WIDTH) / GLUT.glutGet(GLUT.GLUT_WINDOW_HEIGHT)
 
         mvp = _setup_projection(camera_fov_y, aspect_ratio, 0.1, 100) @ \
-            _opencv_opengl_transform @ \
-            np.linalg.inv(_setup_view(camera_tr_vec, camera_rot_mat))
+            np.linalg.inv(_setup_view(camera_tr_vec, camera_rot_mat))       # camera in OpenGL coordinates
 
         tracked_cam_p = _setup_projection(
             self._camera_params.fov_y, self._camera_params.aspect_ratio,
             0.1, 50
         )
-        tracked_cam_mv = _setup_view(tracked_cam_pose.t_vec, tracked_cam_pose.r_mat)
-        tracked_cam_mvp = tracked_cam_p @ _opencv_opengl_transform @ np.linalg.inv(tracked_cam_mv)
+        tracked_cam_mv = _opencv_opengl_transform @ \
+            _setup_view(tracked_cam_pose.t_vec, tracked_cam_pose.r_mat) @ \
+            _opencv_opengl_transform                                        # camera in OpenCV coordinates
+                                                                            # -> conversion needed
+        tracked_cam_mvp = tracked_cam_p @ np.linalg.inv(tracked_cam_mv)
 
         self._render_cam_frustum(
-            mvp @ tracked_cam_mv @ _opencv_opengl_transform @ np.linalg.inv(tracked_cam_p)
+            mvp @ tracked_cam_mv @ np.linalg.inv(tracked_cam_p)
         )
-        self._render_points(mvp)
-        self._render_cam_track(mvp)
+        self._render_points(mvp @ _opencv_opengl_transform)    # point cloud in OpenCV coordinates
+        self._render_cam_track(mvp @ _opencv_opengl_transform) # track in OpenCV coordinates
         self._render_cam(
-            mvp @ tracked_cam_mv @ _opencv_opengl_transform,
-            tracked_cam_mvp
+            mvp @ tracked_cam_mv,                              # camera model in OpenGL coordinates
+            tracked_cam_mvp @ _opencv_opengl_transform         # point cloud in OpenCV coordinates
         )
 
         GLUT.glutSwapBuffers()
