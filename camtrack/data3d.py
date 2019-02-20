@@ -30,7 +30,7 @@ class DataFormatError(Exception):
 
 def _check_data_format(stream, schema, name):
     try:
-        data = yaml.load(stream)
+        data = yaml.load(stream, Loader=yaml.CLoader)
     except yaml.YAMLError as err:
         raise DataFormatError('{} YAML error: {}'.format(name, err))
     try:
