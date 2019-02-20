@@ -84,7 +84,7 @@ def _interpolate_cam_pose(t: float, p0: data3d.Pose, p1: data3d.Pose):
 
 
 def _setup_projection(fov_y, aspect_ratio, z_near, z_far):
-    y_max = z_near * np.tan(fov_y)
+    y_max = z_near * np.tan(fov_y / 2)
     x_max = y_max * aspect_ratio
 
     return np.array([
