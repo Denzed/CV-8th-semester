@@ -6,7 +6,8 @@ numpy
 opencv-python
 pims
 PyOpenGL
-pyyaml
+PyYAML
+pyquaternion
 recordclass
 scikit-learn
 scipy
