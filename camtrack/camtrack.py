@@ -17,18 +17,30 @@ from data3d import CameraParameters, PointCloud, Pose
 
 initialization_frames = 50
 frame_refining_window = 10
-essential_homography_ratio_threshold = 0.3
+essential_homography_ratio_threshold = 1.5
+
+triangulation_modes = [
+    ("Strict", TriangulationParameters(
+        max_reprojection_error=1,
+        min_triangulation_angle_deg=5,
+        min_depth=0.1
+    )),
+    ("Medium", TriangulationParameters(
+        max_reprojection_error=2,
+        min_triangulation_angle_deg=3,
+        min_depth=0.1
+    )),
+    ("Mild", TriangulationParameters(
+        max_reprojection_error=3,
+        min_triangulation_angle_deg=1,
+        min_depth=0.1
+    ))
+]
 
 findEssentialMat_params = dict(
     method=cv2.RANSAC,
-    prob=0.99,
+    prob=0.9,
     threshold=1
-)
-
-triangulation_params = TriangulationParameters(
-    max_reprojection_error=2,
-    min_triangulation_angle_deg=3,
-    min_depth=0.1
 )
 
 solvePnPRansac_params = dict(
@@ -38,37 +50,43 @@ solvePnPRansac_params = dict(
 )
 
 
-def _initialize_cloud_by_two_frames(prev_corners, cur_corners, intrinsic_mat, base_view=eye3x4()):
+def _initialize_cloud_by_two_frames(
+        prev_corners, cur_corners,
+        intrinsic_mat, base_view,
+        triangulation_params
+):
     correspondences = build_correspondences(prev_corners, cur_corners)
 
-    failed = correspondences.points_1.shape[0] <= 5 # http://answers.opencv.org/question/67951/essential-matrix-6x3-expecting-3x3/
+    failed = correspondences.points_1.shape[0] <= 5
 
-    E, mask = [None] * 2
+    e, mask = [None] * 2
     if not failed:
-        E, mask = cv2.findEssentialMat(
+        e, mask = cv2.findEssentialMat(
             correspondences.points_1, correspondences.points_2, intrinsic_mat,
             **findEssentialMat_params
         )
 
-        H, mask_H = cv2.findHomography(
+        _, mask_h = cv2.findHomography(
             correspondences.points_1,
             correspondences.points_2,
             method=findEssentialMat_params['method'],
             ransacReprojThreshold=triangulation_params.max_reprojection_error,
             maxIters=solvePnPRansac_params['iterationsCount'],
-            confidence=findEssentialMat_params['prob']
+            confidence=findEssentialMat_params['prob'],
+            mask=np.copy(mask)
         )
 
         essential_inliers = np.sum(mask)
-        homography_inliers = np.sum(mask_H)
-        failed |= essential_inliers / homography_inliers < essential_homography_ratio_threshold
+        homography_inliers = np.sum(mask_h)
+        failed |= homography_inliers == 0 \
+            or essential_inliers < essential_homography_ratio_threshold * homography_inliers
 
     if not failed:
         mask = np.ma.make_mask(mask).flatten()
-        R1, R2, t12 = cv2.decomposeEssentialMat(E)
+        r1, r2, t12 = cv2.decomposeEssentialMat(e)
 
         points, ids, view = np.array([]), np.array([]), None
-        for R in [R1, R2]:
+        for R in [r1, r2]:
             for t in [t12, -t12]:
                 view_ = np.hstack((R, t))
 
@@ -89,31 +107,43 @@ def _initialize_cloud_by_two_frames(prev_corners, cur_corners, intrinsic_mat, ba
     return -1, None, None, None
 
 
-def _initialize_cloud(corner_storage: CornerStorage, intrinsic_mat: np.ndarray) -> (int, np.ndarray, PointCloudBuilder):
-    res = (-1, -1, None, None, None, None)
+def _initialize_cloud(
+        corner_storage: CornerStorage,
+        intrinsic_mat: np.ndarray,
+        triangulation_params: TriangulationParameters
+) -> (int, np.ndarray, PointCloudBuilder):
+    res = (-1, -1, None, None, None)
 
     for frame, corners in enumerate(corner_storage[1:initialization_frames + 1], start=1):
-        inliers, view, points, ids = _initialize_cloud_by_two_frames(corner_storage[0], corners, intrinsic_mat)
+        inliers, view, points, ids = _initialize_cloud_by_two_frames(
+            corner_storage[0], corners,
+            intrinsic_mat, eye3x4(),
+            triangulation_params
+        )
         res_ = (inliers, frame, view, points, ids)
         if res_[0] > res[0]:
             res = res_
 
     size, frame, view, points, ids = res
+
+    if size <= 0:
+        raise ValueError("initialization failed")
     print(f"Initial cloud size if {size}")
 
     cloud_builder = PointCloudBuilder()
     cloud_builder.add_points(ids, points)
 
-    return (frame, view, cloud_builder)
+    return frame, view, cloud_builder
 
 
 def _track_camera(corner_storage: CornerStorage,
-                  intrinsic_mat: np.ndarray) \
+                  intrinsic_mat: np.ndarray,
+                  triangulation_params: TriangulationParameters) \
         -> Tuple[List[np.ndarray], PointCloudBuilder]:
 
     views = []
     (calibration_frame, calibration_view, cloud_builder) = \
-        _initialize_cloud(corner_storage, intrinsic_mat)
+        _initialize_cloud(corner_storage, intrinsic_mat, triangulation_params)
 
     refinement_frame = 0 + frame_refining_window
     for frame, corners in enumerate(corner_storage):
@@ -130,8 +160,13 @@ def _track_camera(corner_storage: CornerStorage,
             indices=True
         )
 
-        inliers_provided, R, t, inliers = cv2.solvePnPRansac(
-            cloud_builder.points[indices_1], corners.points[indices_2],
+        if indices_1.shape[0] < 4:
+            print()
+            raise ValueError("not enough points for solvePnPRansac")
+
+        inliers_provided, r, t, inliers = cv2.solvePnPRansac(
+            cloud_builder.points[indices_1],
+            np.reshape(corners.points[indices_2], (-1, 1, 2)),
             intrinsic_mat,
             **solvePnPRansac_params
         )
@@ -142,7 +177,7 @@ def _track_camera(corner_storage: CornerStorage,
         else:
             outlier_ids = np.array([], dtype=intersection_ids.dtype)
 
-        views.append(rodrigues_and_translation_to_view_mat3x4(R, t))
+        views.append(rodrigues_and_translation_to_view_mat3x4(r, t))
 
         cloud_builder.remove_ids(outlier_ids)
 
@@ -152,8 +187,8 @@ def _track_camera(corner_storage: CornerStorage,
                 point_cnt, _, new_points, new_ids = _initialize_cloud_by_two_frames(
                     corner_storage[other_frame],
                     corners,
-                    intrinsic_mat,
-                    base_view=views[other_frame]
+                    intrinsic_mat, views[other_frame],
+                    triangulation_params
                 )
 
                 if point_cnt > 0:
@@ -168,10 +203,19 @@ def _track_camera(corner_storage: CornerStorage,
                         np.delete(new_ids, indices_2, axis=0),
                         np.delete(new_points, indices_2, axis=0)
                     )
+                    # triangulated += point_cnt
+                    # cloud_builder.add_points(new_ids, new_points)
+
             refinement_frame = frame + frame_refining_window
 
-        print(f"Frame \t{frame}: in \t{inliers.shape[0] if inliers is not None else 0} | triangulated \t{triangulated} | total in cloud \t{cloud_builder.points.shape[0]}", end="\r")
-    print()
+        inlier_cnt = inliers.shape[0] if inliers is not None else 0
+        in_cloud_cnt = cloud_builder.points.shape[0]
+        print(
+            f"Frame {frame: 4}: in {inlier_cnt: 4} "
+            f"| triangulated \t{triangulated: 4} "
+            f"| total in cloud \t{in_cloud_cnt}",
+            end="\r"
+        )
 
     return views, cloud_builder
 
@@ -185,10 +229,19 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         camera_parameters,
         rgb_sequence[0].shape[0]
     )
-    view_mats, point_cloud_builder = _track_camera(
-        corner_storage,
-        intrinsic_mat
-    )
+
+    for mode, triangulation_params in triangulation_modes:
+        try:
+            view_mats, point_cloud_builder = _track_camera(
+                corner_storage,
+                intrinsic_mat,
+                triangulation_params
+            )
+            break
+        except ValueError as error:
+            print(f"{mode} mode failed: {error.args}")
+    else:
+        raise ValueError("all tracking modes failed")
     calc_point_cloud_colors(
         point_cloud_builder,
         rgb_sequence,
