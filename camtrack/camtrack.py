@@ -15,9 +15,9 @@ from _camtrack import *
 from corners import CornerStorage
 from data3d import CameraParameters, PointCloud, Pose
 
-initialization_frames = 25
+initialization_frames = 50
 frame_refining_window = 10
-essential_homography_ratio_threshold = 0.7
+essential_homography_ratio_threshold = 0.3
 
 findEssentialMat_params = dict(
     method=cv2.RANSAC,
@@ -26,7 +26,7 @@ findEssentialMat_params = dict(
 )
 
 triangulation_params = TriangulationParameters(
-    max_reprojection_error=1,
+    max_reprojection_error=2,
     min_triangulation_angle_deg=3,
     min_depth=0.1
 )
@@ -34,11 +34,11 @@ triangulation_params = TriangulationParameters(
 solvePnPRansac_params = dict(
     distCoeffs=None,
     iterationsCount=239,
-    reprojectionError=1
+    reprojectionError=3
 )
 
 
-def _initialize_cloud_by_two_frames(prev_corners, cur_corners, intrinsic_mat):
+def _initialize_cloud_by_two_frames(prev_corners, cur_corners, intrinsic_mat, base_view=eye3x4()):
     correspondences = build_correspondences(prev_corners, cur_corners)
 
     failed = correspondences.points_1.shape[0] <= 5 # http://answers.opencv.org/question/67951/essential-matrix-6x3-expecting-3x3/
@@ -69,12 +69,12 @@ def _initialize_cloud_by_two_frames(prev_corners, cur_corners, intrinsic_mat):
 
         points, ids, view = np.array([]), np.array([]), None
         for R in [R1, R2]:
-            for t in [t12.reshape(-1), -t12.reshape(-1)]:
-                view_ = pose_to_view_mat3x4(Pose(R, t))
+            for t in [t12, -t12]:
+                view_ = np.hstack((R, t))
 
                 points_, ids_ = triangulate_correspondences(
                     correspondences,
-                    eye3x4(),
+                    base_view,
                     view_,
                     intrinsic_mat,
                     triangulation_params,
@@ -111,16 +111,17 @@ def _track_camera(corner_storage: CornerStorage,
                   intrinsic_mat: np.ndarray) \
         -> Tuple[List[np.ndarray], PointCloudBuilder]:
 
-    views = [None] * len(corner_storage)
+    views = []
     (calibration_frame, calibration_view, cloud_builder) = \
         _initialize_cloud(corner_storage, intrinsic_mat)
 
+    refinement_frame = 0 + frame_refining_window
     for frame, corners in enumerate(corner_storage):
         if frame == 0:
-            views[frame] = eye3x4()
+            views.append(eye3x4())
             continue
         elif frame == calibration_frame:
-            views[frame] = calibration_view
+            views.append(calibration_view)
             continue
 
         _, (indices_1, indices_2) = snp.intersect(
@@ -141,29 +142,33 @@ def _track_camera(corner_storage: CornerStorage,
         else:
             outlier_ids = np.array([], dtype=intersection_ids.dtype)
 
-        views[frame] = rodrigues_and_translation_to_view_mat3x4(R, t)
+        views.append(rodrigues_and_translation_to_view_mat3x4(R, t))
 
         cloud_builder.remove_ids(outlier_ids)
 
         triangulated = 0
-        if frame >= frame_refining_window:
-            other_frame = frame - frame_refining_window
+        if frame >= refinement_frame:
+            for other_frame in range(frame):
+                point_cnt, _, new_points, new_ids = _initialize_cloud_by_two_frames(
+                    corner_storage[other_frame],
+                    corners,
+                    intrinsic_mat,
+                    base_view=views[other_frame]
+                )
 
-            correspondences = build_correspondences(
-                corner_storage[other_frame],
-                corners
-            )
+                if point_cnt > 0:
+                    _, (indices_1, indices_2) = snp.intersect(
+                        cloud_builder.ids.flatten(),
+                        new_ids.flatten(),
+                        indices=True
+                    )
 
-            new_points, new_ids = triangulate_correspondences(
-                correspondences,
-                views[other_frame],
-                views[frame],
-                intrinsic_mat,
-                triangulation_params
-            )
-
-            triangulated = new_points.shape[0]
-            cloud_builder.add_points(new_ids, new_points)
+                    triangulated += point_cnt - indices_2.shape[0]
+                    cloud_builder.add_points(
+                        np.delete(new_ids, indices_2, axis=0),
+                        np.delete(new_points, indices_2, axis=0)
+                    )
+            refinement_frame = frame + frame_refining_window
 
         print(f"Frame \t{frame}: in \t{inliers.shape[0] if inliers is not None else 0} | triangulated \t{triangulated} | total in cloud \t{cloud_builder.points.shape[0]}", end="\r")
     print()
