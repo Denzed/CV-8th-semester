@@ -4,7 +4,7 @@ __all__ = [
     'track_and_calc_colors'
 ]
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import cv2
 import numpy as np
@@ -15,45 +15,77 @@ from _camtrack import *
 from corners import CornerStorage
 from data3d import CameraParameters, PointCloud, Pose
 
+
+class TrackingMode:
+    def __init__(self,
+                 name: str,
+                 triangulation_params: TriangulationParameters,
+                 essential_homography_ratio_threshold: float,
+                 essential_mat_params: Dict,
+                 solve_pnp_ransac_params: Dict):
+        self.name = name
+        self.triangulation_params = triangulation_params
+        self.essential_homography_ratio_threshold = essential_homography_ratio_threshold
+        self.essential_mat_params = essential_mat_params
+        self.solve_pnp_ransac_params = solve_pnp_ransac_params
+
+
 initialization_frames = 50
 frame_refining_window = 10
-essential_homography_ratio_threshold = 1.5
 
-triangulation_modes = [
-    ("Strict", TriangulationParameters(
-        max_reprojection_error=1,
-        min_triangulation_angle_deg=5,
-        min_depth=0.1
-    )),
-    ("Medium", TriangulationParameters(
-        max_reprojection_error=2,
-        min_triangulation_angle_deg=3,
-        min_depth=0.1
-    )),
-    ("Mild", TriangulationParameters(
-        max_reprojection_error=3,
-        min_triangulation_angle_deg=1,
-        min_depth=0.1
-    ))
-]
-
-findEssentialMat_params = dict(
+default_essential_mat_params = dict(
     method=cv2.RANSAC,
     prob=0.9,
     threshold=1
 )
 
-solvePnPRansac_params = dict(
+default_solve_pnp_ransac_params = dict(
     distCoeffs=None,
     iterationsCount=239,
     reprojectionError=3
 )
 
+tracking_modes = [
+    TrackingMode(
+        "Strict",
+        TriangulationParameters(
+            max_reprojection_error=1,
+            min_triangulation_angle_deg=8,
+            min_depth=0.1
+        ),
+        3,
+        default_essential_mat_params,
+        default_solve_pnp_ransac_params
+    ),
+    TrackingMode(
+        "Medium",
+        TriangulationParameters(
+            max_reprojection_error=2,
+            min_triangulation_angle_deg=3,
+            min_depth=0.1
+        ),
+        2,
+        default_essential_mat_params,
+        default_solve_pnp_ransac_params
+    ),
+    TrackingMode(
+        "Mild",
+        TriangulationParameters(
+            max_reprojection_error=3,
+            min_triangulation_angle_deg=1,
+            min_depth=0.1
+        ),
+        1,
+        default_essential_mat_params,
+        default_solve_pnp_ransac_params
+    )
+]
+
 
 def _initialize_cloud_by_two_frames(
         prev_corners, cur_corners,
         intrinsic_mat, base_view,
-        triangulation_params
+        tracking_mode: TrackingMode
 ):
     correspondences = build_correspondences(prev_corners, cur_corners)
 
@@ -63,23 +95,26 @@ def _initialize_cloud_by_two_frames(
     if not failed:
         e, mask = cv2.findEssentialMat(
             correspondences.points_1, correspondences.points_2, intrinsic_mat,
-            **findEssentialMat_params
+            **tracking_mode.essential_mat_params
         )
 
         _, mask_h = cv2.findHomography(
             correspondences.points_1,
             correspondences.points_2,
-            method=findEssentialMat_params['method'],
-            ransacReprojThreshold=triangulation_params.max_reprojection_error,
-            maxIters=solvePnPRansac_params['iterationsCount'],
-            confidence=findEssentialMat_params['prob'],
+            method=tracking_mode.essential_mat_params['method'],
+            ransacReprojThreshold=tracking_mode.triangulation_params.max_reprojection_error,
+            maxIters=tracking_mode.solve_pnp_ransac_params['iterationsCount'],
+            confidence=tracking_mode.essential_mat_params['prob'],
             mask=np.copy(mask)
         )
 
         essential_inliers = np.sum(mask)
         homography_inliers = np.sum(mask_h)
+
+        print(essential_inliers, homography_inliers, essential_inliers / homography_inliers)
+
         failed |= homography_inliers == 0 \
-            or essential_inliers < essential_homography_ratio_threshold * homography_inliers
+            or essential_inliers < tracking_mode.essential_homography_ratio_threshold * homography_inliers
 
     if not failed:
         mask = np.ma.make_mask(mask).flatten()
@@ -95,12 +130,13 @@ def _initialize_cloud_by_two_frames(
                     base_view,
                     view_,
                     intrinsic_mat,
-                    triangulation_params,
+                    tracking_mode.triangulation_params,
                     mask=mask
                 )
 
                 if points_.size > points.size:
                     points, ids, view = points_, ids_, view_
+        print(points.shape)
 
         return points.shape[0], view, points, ids
 
@@ -110,7 +146,7 @@ def _initialize_cloud_by_two_frames(
 def _initialize_cloud(
         corner_storage: CornerStorage,
         intrinsic_mat: np.ndarray,
-        triangulation_params: TriangulationParameters
+        tracking_mode: TrackingMode
 ) -> (int, np.ndarray, PointCloudBuilder):
     res = (-1, -1, None, None, None)
 
@@ -118,7 +154,7 @@ def _initialize_cloud(
         inliers, view, points, ids = _initialize_cloud_by_two_frames(
             corner_storage[0], corners,
             intrinsic_mat, eye3x4(),
-            triangulation_params
+            tracking_mode
         )
         res_ = (inliers, frame, view, points, ids)
         if res_[0] > res[0]:
@@ -138,12 +174,12 @@ def _initialize_cloud(
 
 def _track_camera(corner_storage: CornerStorage,
                   intrinsic_mat: np.ndarray,
-                  triangulation_params: TriangulationParameters) \
+                  tracking_mode: TrackingMode) \
         -> Tuple[List[np.ndarray], PointCloudBuilder]:
 
     views = []
     (calibration_frame, calibration_view, cloud_builder) = \
-        _initialize_cloud(corner_storage, intrinsic_mat, triangulation_params)
+        _initialize_cloud(corner_storage, intrinsic_mat, tracking_mode)
 
     refinement_frame = 0 + frame_refining_window
     for frame, corners in enumerate(corner_storage):
@@ -168,7 +204,7 @@ def _track_camera(corner_storage: CornerStorage,
             cloud_builder.points[indices_1],
             np.reshape(corners.points[indices_2], (-1, 1, 2)),
             intrinsic_mat,
-            **solvePnPRansac_params
+            **tracking_mode.solve_pnp_ransac_params
         )
 
         intersection_ids = cloud_builder.ids[indices_1]
@@ -188,7 +224,7 @@ def _track_camera(corner_storage: CornerStorage,
                     corner_storage[other_frame],
                     corners,
                     intrinsic_mat, views[other_frame],
-                    triangulation_params
+                    tracking_mode
                 )
 
                 if point_cnt > 0:
@@ -230,16 +266,18 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         rgb_sequence[0].shape[0]
     )
 
-    for mode, triangulation_params in triangulation_modes:
+    for mode in tracking_modes:
         try:
+            print(f"trying \"{mode.name}\" mode...")
             view_mats, point_cloud_builder = _track_camera(
                 corner_storage,
                 intrinsic_mat,
-                triangulation_params
+                mode
             )
+            print(f"trying \"{mode.name}\" mode... Success!")
             break
         except ValueError as error:
-            print(f"{mode} mode failed: {error.args}")
+            print(f"trying \"{mode.name}\" mode... Failed with {error.args}!")
     else:
         raise ValueError("all tracking modes failed")
     calc_point_cloud_colors(
