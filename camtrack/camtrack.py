@@ -22,63 +22,45 @@ class TrackingMode:
                  triangulation_params: TriangulationParameters,
                  essential_homography_ratio_threshold: float,
                  essential_mat_params: Dict,
-                 solve_pnp_ransac_params: Dict):
+                 solve_pnp_ransac_params: Dict,
+                 frame_refinement_window: int):
         self.name = name
         self.triangulation_params = triangulation_params
         self.essential_homography_ratio_threshold = essential_homography_ratio_threshold
         self.essential_mat_params = essential_mat_params
         self.solve_pnp_ransac_params = solve_pnp_ransac_params
+        self.frame_refinement_window = frame_refinement_window
 
 
 initialization_frames = 50
-frame_refining_window = 10
 
-default_essential_mat_params = dict(
-    method=cv2.RANSAC,
-    prob=0.9,
-    threshold=1
-)
-
-default_solve_pnp_ransac_params = dict(
-    distCoeffs=None,
-    iterationsCount=239,
-    reprojectionError=3
-)
+default_solve_pnp_ransac_params = dict(distCoeffs=None, iterationsCount=239, reprojectionError=3)
 
 tracking_modes = [
     TrackingMode(
         "Strict",
-        TriangulationParameters(
-            max_reprojection_error=1,
-            min_triangulation_angle_deg=8,
-            min_depth=0.1
-        ),
+        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=7, min_depth=0.1),
         3,
-        default_essential_mat_params,
-        default_solve_pnp_ransac_params
-    ),
-    TrackingMode(
-        "Medium",
-        TriangulationParameters(
-            max_reprojection_error=2,
-            min_triangulation_angle_deg=3,
-            min_depth=0.1
-        ),
-        2,
-        default_essential_mat_params,
-        default_solve_pnp_ransac_params
+        dict(method=cv2.RANSAC, prob=0.999, threshold=2),
+        default_solve_pnp_ransac_params,
+        10
     ),
     TrackingMode(
         "Mild",
-        TriangulationParameters(
-            max_reprojection_error=3,
-            min_triangulation_angle_deg=1,
-            min_depth=0.1
-        ),
-        1,
-        default_essential_mat_params,
-        default_solve_pnp_ransac_params
-    )
+        TriangulationParameters(max_reprojection_error=2, min_triangulation_angle_deg=3, min_depth=0.1),
+        2,
+        dict(method=cv2.RANSAC, prob=0.99, threshold=3),
+        default_solve_pnp_ransac_params,
+        5
+    ),
+    TrackingMode(
+        "Very mild",
+        TriangulationParameters(max_reprojection_error=3, min_triangulation_angle_deg=1, min_depth=0.1),
+        0.95,
+        dict(method=cv2.RANSAC, prob=0.9, threshold=4),
+        default_solve_pnp_ransac_params,
+        1
+    ),
 ]
 
 
@@ -181,7 +163,7 @@ def _track_camera(corner_storage: CornerStorage,
     (calibration_frame, calibration_view, cloud_builder) = \
         _initialize_cloud(corner_storage, intrinsic_mat, tracking_mode)
 
-    refinement_frame = 0 + frame_refining_window
+    refinement_frame = 0 + tracking_mode.frame_refinement_window
     for frame, corners in enumerate(corner_storage):
         if frame == 0:
             views.append(eye3x4())
@@ -219,7 +201,11 @@ def _track_camera(corner_storage: CornerStorage,
 
         triangulated = 0
         if frame >= refinement_frame:
-            for other_frame in range(frame):
+            if tracking_mode.frame_refinement_window > 1:
+                refinement_start = max(0, frame - 2 * tracking_mode.frame_refinement_window)
+            else:
+                refinement_start = max(0, frame - initialization_frames)
+            for other_frame in range(refinement_start, frame):
                 point_cnt, _, new_points, new_ids = _initialize_cloud_by_two_frames(
                     corner_storage[other_frame],
                     corners,
@@ -239,15 +225,13 @@ def _track_camera(corner_storage: CornerStorage,
                         np.delete(new_ids, indices_2, axis=0),
                         np.delete(new_points, indices_2, axis=0)
                     )
-                    # triangulated += point_cnt
-                    # cloud_builder.add_points(new_ids, new_points)
 
-            refinement_frame = frame + frame_refining_window
+            refinement_frame = frame + tracking_mode.frame_refinement_window
 
         inlier_cnt = inliers.shape[0] if inliers is not None else 0
         in_cloud_cnt = cloud_builder.points.shape[0]
         print(
-            f"Frame {frame: 4}: in {inlier_cnt: 4} "
+            f"Frame {frame: 4}: in {inlier_cnt: 4} of {intersection_ids.shape[0]} "
             f"| triangulated \t{triangulated: 4} "
             f"| total in cloud \t{in_cloud_cnt}",
             end="\r"
