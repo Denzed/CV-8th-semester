@@ -93,8 +93,6 @@ def _initialize_cloud_by_two_frames(
         essential_inliers = np.sum(mask)
         homography_inliers = np.sum(mask_h)
 
-        print(essential_inliers, homography_inliers, essential_inliers / homography_inliers)
-
         failed |= homography_inliers == 0 \
             or essential_inliers < tracking_mode.essential_homography_ratio_threshold * homography_inliers
 
@@ -118,7 +116,6 @@ def _initialize_cloud_by_two_frames(
 
                 if points_.size > points.size:
                     points, ids, view = points_, ids_, view_
-        print(points.shape)
 
         return points.shape[0], view, points, ids
 
