@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+from ba import run_bundle_adjustment
 
 __all__ = [
     'track_and_calc_colors'
@@ -23,13 +24,15 @@ class TrackingMode:
                  essential_homography_ratio_threshold: float,
                  essential_mat_params: Dict,
                  solve_pnp_ransac_params: Dict,
-                 frame_refinement_window: int):
+                 frame_refinement_window: int,
+                 bundle_adjustment_max_reprojection: float):
         self.name = name
         self.triangulation_params = triangulation_params
         self.essential_homography_ratio_threshold = essential_homography_ratio_threshold
         self.essential_mat_params = essential_mat_params
         self.solve_pnp_ransac_params = solve_pnp_ransac_params
         self.frame_refinement_window = frame_refinement_window
+        self.bundle_adjustment_max_reprojection_error = bundle_adjustment_max_reprojection
 
 
 initialization_frames = 500
@@ -43,7 +46,8 @@ tracking_modes = [
         3,
         dict(method=cv2.RANSAC, prob=0.999, threshold=1),
         default_solve_pnp_ransac_params,
-        10
+        10,
+        1
     ),
     TrackingMode(
         "Mild",
@@ -51,7 +55,8 @@ tracking_modes = [
         2,
         dict(method=cv2.RANSAC, prob=0.999, threshold=3),
         default_solve_pnp_ransac_params,
-        5
+        5,
+        2
     ),
     TrackingMode(
         "Very mild",
@@ -59,7 +64,8 @@ tracking_modes = [
         0.95,
         dict(method=cv2.RANSAC, prob=0.999, threshold=5),
         default_solve_pnp_ransac_params,
-        1
+        1,
+        3
     ),
 ]
 
@@ -275,6 +281,17 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
                 mode
             )
             print(f"trying \"{mode.name}\" mode... Success!")
+            print(f"Running bundle adjustment with maximum error "
+                  f"{mode.bundle_adjustment_max_reprojection_error}...")
+            view_mats = run_bundle_adjustment(
+                intrinsic_mat,
+                list(corner_storage),
+                mode.bundle_adjustment_max_reprojection_error,
+                view_mats,
+                point_cloud_builder
+            )
+            print(f"Running bundle adjustment with maximum error "
+                  f"{mode.bundle_adjustment_max_reprojection_error}... Done!")
             break
         except ValueError as error:
             print(f"trying \"{mode.name}\" mode... Failed with {error.args}!")

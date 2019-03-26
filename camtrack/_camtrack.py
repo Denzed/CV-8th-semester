@@ -13,6 +13,7 @@ __all__ = [
     'eye3x4',
     'project_points',
     'rodrigues_and_translation_to_view_mat3x4',
+    'to_homogeneous',
     'to_opencv_camera_mat3x3',
     'triangulate_correspondences',
     'view_mat3x4_to_pose',
@@ -69,12 +70,12 @@ def pose_to_view_mat3x4(pose: Pose) -> np.ndarray:
     ))
 
 
-def _to_homogeneous(points):
+def to_homogeneous(points):
     return np.pad(points, ((0, 0), (0, 1)), 'constant', constant_values=(1,))
 
 
 def project_points(points3d: np.ndarray, proj_mat: np.ndarray) -> np.ndarray:
-    points3d = _to_homogeneous(points3d)
+    points3d = to_homogeneous(points3d)
     points2d = np.dot(proj_mat, points3d.T)
     points2d /= points2d[[2]]
     return points2d[:2].T
@@ -155,7 +156,7 @@ def build_correspondences(corners_1: FrameCorners, corners_2: FrameCorners,
 
 
 def _calc_z_mask(points3d, view_mat, min_depth):
-    points3d = _to_homogeneous(points3d)
+    points3d = to_homogeneous(points3d)
     points3d_in_camera_space = np.dot(view_mat, points3d.T)
     return points3d_in_camera_space[2].flatten() >= min_depth
 
