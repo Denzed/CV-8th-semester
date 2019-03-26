@@ -32,24 +32,24 @@ class TrackingMode:
         self.frame_refinement_window = frame_refinement_window
 
 
-initialization_frames = 50
+initialization_frames = 500
 
 default_solve_pnp_ransac_params = dict(distCoeffs=None, iterationsCount=239, reprojectionError=3)
 
 tracking_modes = [
     TrackingMode(
         "Strict",
-        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=7, min_depth=0.1),
+        TriangulationParameters(max_reprojection_error=0.5, min_triangulation_angle_deg=5, min_depth=0.1),
         3,
-        dict(method=cv2.RANSAC, prob=0.999, threshold=2),
+        dict(method=cv2.RANSAC, prob=0.999, threshold=1),
         default_solve_pnp_ransac_params,
         10
     ),
     TrackingMode(
         "Mild",
-        TriangulationParameters(max_reprojection_error=2, min_triangulation_angle_deg=3, min_depth=0.1),
+        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=3, min_depth=0.1),
         2,
-        dict(method=cv2.RANSAC, prob=0.99, threshold=3),
+        dict(method=cv2.RANSAC, prob=0.999, threshold=3),
         default_solve_pnp_ransac_params,
         5
     ),
@@ -57,7 +57,7 @@ tracking_modes = [
         "Very mild",
         TriangulationParameters(max_reprojection_error=3, min_triangulation_angle_deg=1, min_depth=0.1),
         0.95,
-        dict(method=cv2.RANSAC, prob=0.9, threshold=4),
+        dict(method=cv2.RANSAC, prob=0.999, threshold=5),
         default_solve_pnp_ransac_params,
         1
     ),
@@ -151,6 +151,27 @@ def _initialize_cloud(
     return frame, view, cloud_builder
 
 
+def _update_cloud_by_two_frames(
+        prev_corners, cur_corners,
+        intrinsic_mat, prev_view, cur_view,
+        tracking_mode: TrackingMode
+):
+    correspondences = build_correspondences(prev_corners, cur_corners)
+
+    if correspondences.points_1.shape[0] <= 5:
+        return -1, None, None
+
+    points, ids = triangulate_correspondences(
+        correspondences,
+        prev_view,
+        cur_view,
+        intrinsic_mat,
+        tracking_mode.triangulation_params,
+    )
+
+    return points.shape[0], points, ids
+
+
 def _track_camera(corner_storage: CornerStorage,
                   intrinsic_mat: np.ndarray,
                   tracking_mode: TrackingMode) \
@@ -203,10 +224,9 @@ def _track_camera(corner_storage: CornerStorage,
             else:
                 refinement_start = max(0, frame - initialization_frames)
             for other_frame in range(refinement_start, frame):
-                point_cnt, _, new_points, new_ids = _initialize_cloud_by_two_frames(
-                    corner_storage[other_frame],
-                    corners,
-                    intrinsic_mat, views[other_frame],
+                point_cnt, new_points, new_ids = _update_cloud_by_two_frames(
+                    corner_storage[other_frame], corners,
+                    intrinsic_mat, views[other_frame], views[frame],
                     tracking_mode
                 )
 
@@ -230,8 +250,7 @@ def _track_camera(corner_storage: CornerStorage,
         print(
             f"Frame {frame: 4}: in {inlier_cnt: 4} of {intersection_ids.shape[0]} "
             f"| triangulated \t{triangulated: 4} "
-            f"| total in cloud \t{in_cloud_cnt}",
-            end="\r"
+            f"| total in cloud \t{in_cloud_cnt}"
         )
 
     return views, cloud_builder
