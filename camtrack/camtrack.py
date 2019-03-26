@@ -42,28 +42,28 @@ default_solve_pnp_ransac_params = dict(distCoeffs=None, iterationsCount=239, rep
 tracking_modes = [
     TrackingMode(
         "Strict",
-        TriangulationParameters(max_reprojection_error=0.5, min_triangulation_angle_deg=5, min_depth=0.1),
+        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=7, min_depth=0.1),
         3,
-        dict(method=cv2.RANSAC, prob=0.999, threshold=1),
+        dict(method=cv2.RANSAC, prob=0.99999, threshold=2),
         default_solve_pnp_ransac_params,
-        10,
+        7,
         1
     ),
     TrackingMode(
         "Mild",
-        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=3, min_depth=0.1),
+        TriangulationParameters(max_reprojection_error=2, min_triangulation_angle_deg=2, min_depth=0.1),
         2,
-        dict(method=cv2.RANSAC, prob=0.999, threshold=3),
-        default_solve_pnp_ransac_params,
+        dict(method=cv2.RANSAC, prob=0.99999, threshold=2),
+        dict(distCoeffs=None, iterationsCount=239, reprojectionError=4),
         5,
         2
     ),
     TrackingMode(
         "Very mild",
-        TriangulationParameters(max_reprojection_error=3, min_triangulation_angle_deg=1, min_depth=0.1),
+        TriangulationParameters(max_reprojection_error=3, min_triangulation_angle_deg=0.5, min_depth=0.1),
         0.95,
-        dict(method=cv2.RANSAC, prob=0.999, threshold=5),
-        default_solve_pnp_ransac_params,
+        dict(method=cv2.RANSAC, prob=0.99999, threshold=2),
+        dict(distCoeffs=None, iterationsCount=239, reprojectionError=6),
         1,
         3
     ),
@@ -99,8 +99,7 @@ def _initialize_cloud_by_two_frames(
         essential_inliers = np.sum(mask)
         homography_inliers = np.sum(mask_h)
 
-        failed |= homography_inliers == 0 \
-            or essential_inliers < tracking_mode.essential_homography_ratio_threshold * homography_inliers
+        failed |= essential_inliers < tracking_mode.essential_homography_ratio_threshold * homography_inliers
 
     if not failed:
         mask = np.ma.make_mask(mask).flatten()
@@ -178,6 +177,27 @@ def _update_cloud_by_two_frames(
     return points.shape[0], points, ids
 
 
+def _do_refining(frame, corners, views, corner_storage, intrinsic_mat, tracking_mode):
+    if tracking_mode.frame_refinement_window > 1:
+        refinement_start = max(0, frame - 2 * tracking_mode.frame_refinement_window)
+    else:
+        refinement_start = max(0, frame - initialization_frames)
+
+    cloud_builder = PointCloudBuilder()
+
+    for other_frame in range(refinement_start, frame):
+        point_cnt, new_points, new_ids = _update_cloud_by_two_frames(
+            corner_storage[other_frame], corners,
+            intrinsic_mat, views[other_frame], views[frame],
+            tracking_mode
+        )
+
+        if point_cnt > 0:
+            cloud_builder.add_points(new_ids, new_points)
+
+    return cloud_builder
+
+
 def _track_camera(corner_storage: CornerStorage,
                   intrinsic_mat: np.ndarray,
                   tracking_mode: TrackingMode) \
@@ -203,7 +223,26 @@ def _track_camera(corner_storage: CornerStorage,
         )
 
         if indices_1.shape[0] < 4:
-            print()
+            # print("not enough points for solvePnPRansac -- trying to refine previous frame")
+            # old_cnt = indices_1.shape[0]
+            #
+            # for base_frame in range(frame):
+            #     new_point_cloud = _do_refining(
+            #         base_frame, corner_storage[base_frame], views, corner_storage, intrinsic_mat, tracking_mode
+            #     )
+            #
+            #     cloud_builder.add_points(new_point_cloud.ids, new_point_cloud.points)
+            #
+            # _, (indices_1, indices_2) = snp.intersect(
+            #     cloud_builder.ids.flatten(),
+            #     corners.ids.flatten(),
+            #     indices=True
+            # )
+            #
+            # print(f"managed to add {indices_1.shape[0] - old_cnt} points")
+            #
+            # if indices_1.shape[0] < 4:
+            #     raise ValueError("still not enough points for solvePnPRansac")
             raise ValueError("not enough points for solvePnPRansac")
 
         inliers_provided, r, t, inliers = cv2.solvePnPRansac(
@@ -225,29 +264,10 @@ def _track_camera(corner_storage: CornerStorage,
 
         triangulated = 0
         if frame >= refinement_frame:
-            if tracking_mode.frame_refinement_window > 1:
-                refinement_start = max(0, frame - 2 * tracking_mode.frame_refinement_window)
-            else:
-                refinement_start = max(0, frame - initialization_frames)
-            for other_frame in range(refinement_start, frame):
-                point_cnt, new_points, new_ids = _update_cloud_by_two_frames(
-                    corner_storage[other_frame], corners,
-                    intrinsic_mat, views[other_frame], views[frame],
-                    tracking_mode
-                )
+            new_point_cloud = _do_refining(frame, corners, views, corner_storage, intrinsic_mat, tracking_mode)
 
-                if point_cnt > 0:
-                    _, (indices_1, indices_2) = snp.intersect(
-                        cloud_builder.ids.flatten(),
-                        new_ids.flatten(),
-                        indices=True
-                    )
-
-                    triangulated += point_cnt - indices_2.shape[0]
-                    cloud_builder.add_points(
-                        np.delete(new_ids, indices_2, axis=0),
-                        np.delete(new_points, indices_2, axis=0)
-                    )
+            cloud_builder.add_points(new_point_cloud.ids, new_point_cloud.points)
+            triangulated = new_point_cloud.ids.shape[0]
 
             refinement_frame = frame + tracking_mode.frame_refinement_window
 
@@ -281,17 +301,17 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
                 mode
             )
             print(f"trying \"{mode.name}\" mode... Success!")
-            print(f"Running bundle adjustment with maximum error "
-                  f"{mode.bundle_adjustment_max_reprojection_error}...")
-            view_mats = run_bundle_adjustment(
-                intrinsic_mat,
-                list(corner_storage),
-                mode.bundle_adjustment_max_reprojection_error,
-                view_mats,
-                point_cloud_builder
-            )
-            print(f"Running bundle adjustment with maximum error "
-                  f"{mode.bundle_adjustment_max_reprojection_error}... Done!")
+            # print(f"Running bundle adjustment with maximum error "
+            #       f"{mode.bundle_adjustment_max_reprojection_error}...")
+            # view_mats = run_bundle_adjustment(
+            #     intrinsic_mat,
+            #     list(corner_storage),
+            #     mode.bundle_adjustment_max_reprojection_error,
+            #     view_mats,
+            #     point_cloud_builder
+            # )
+            # print(f"Running bundle adjustment with maximum error "
+            #       f"{mode.bundle_adjustment_max_reprojection_error}... Done!")
             break
         except ValueError as error:
             print(f"trying \"{mode.name}\" mode... Failed with {error.args}!")

@@ -244,8 +244,8 @@ def check_baseline(view_mat_1: np.ndarray, view_mat_2: np.ndarray,
 
 def rodrigues_and_translation_to_view_mat3x4(r_vec: np.ndarray,
                                              t_vec: np.ndarray) -> np.ndarray:
-    rot_mat, _ = cv2.Rodrigues(r_vec)
-    view_mat = np.hstack((rot_mat, t_vec))
+    r_mat, _ = cv2.Rodrigues(r_vec)
+    view_mat = np.hstack((r_mat, t_vec))
     return view_mat
 
 
