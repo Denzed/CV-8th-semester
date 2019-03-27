@@ -22,13 +22,13 @@ from _corners import dump, load, draw, without_short_tracks, create_cli
 class _CornerStorageBuilder:
     corner_detection_args = dict(
         useHarrisDetector=False,
-        maxCorners=179,
+        maxCorners=1179,
         qualityLevel=0.03,
-        minDistance=10
+        minDistance=8
     )
 
     lucas_kanade_args = dict(
-        winSize=(10, 10),
+        winSize=(8, 8),
         maxLevel=1,
         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
     )

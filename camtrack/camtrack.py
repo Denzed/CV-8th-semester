@@ -37,33 +37,34 @@ class TrackingMode:
 
 initialization_frames = 500
 
-default_solve_pnp_ransac_params = dict(distCoeffs=None, iterationsCount=239, reprojectionError=3)
+default_essential_mat_params = dict(method=cv2.RANSAC, prob=0.999, threshold=1)
+default_solve_pnp_ransac_params = dict(distCoeffs=None, flags=cv2.SOLVEPNP_EPNP)
 
 tracking_modes = [
     TrackingMode(
         "Strict",
-        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=7, min_depth=0.1),
+        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=5, min_depth=0.1),
         3,
-        dict(method=cv2.RANSAC, prob=0.99999, threshold=2),
+        default_essential_mat_params,
         default_solve_pnp_ransac_params,
         7,
         1
     ),
     TrackingMode(
         "Mild",
-        TriangulationParameters(max_reprojection_error=2, min_triangulation_angle_deg=2, min_depth=0.1),
-        2,
-        dict(method=cv2.RANSAC, prob=0.99999, threshold=2),
-        dict(distCoeffs=None, iterationsCount=239, reprojectionError=4),
+        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=3, min_depth=0.1),
+        1.5,
+        default_essential_mat_params,
+        default_solve_pnp_ransac_params,
         5,
         2
     ),
     TrackingMode(
         "Very mild",
-        TriangulationParameters(max_reprojection_error=3, min_triangulation_angle_deg=0.5, min_depth=0.1),
-        0.95,
-        dict(method=cv2.RANSAC, prob=0.99999, threshold=2),
-        dict(distCoeffs=None, iterationsCount=239, reprojectionError=6),
+        TriangulationParameters(max_reprojection_error=1, min_triangulation_angle_deg=1, min_depth=0.1),
+        0.5,
+        default_essential_mat_params,
+        default_solve_pnp_ransac_params,
         1,
         3
     ),
@@ -90,8 +91,7 @@ def _initialize_cloud_by_two_frames(
             correspondences.points_1,
             correspondences.points_2,
             method=tracking_mode.essential_mat_params['method'],
-            ransacReprojThreshold=tracking_mode.triangulation_params.max_reprojection_error,
-            maxIters=tracking_mode.solve_pnp_ransac_params['iterationsCount'],
+            ransacReprojThreshold=tracking_mode.essential_mat_params['threshold'],
             confidence=tracking_mode.essential_mat_params['prob'],
             mask=np.copy(mask)
         )
