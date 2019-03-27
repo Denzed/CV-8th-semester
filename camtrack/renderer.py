@@ -253,6 +253,7 @@ class CameraTrackRenderer:
         self._camera_model_tex = GL.glGenTextures(1)
 
         image_data = cv2.imread(cam_model_files[1])
+        image_data = cv2.resize(image_data, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
         height, width, _ = image_data.shape
 
         self._camera_model_texture_size = (width, height)
@@ -306,18 +307,17 @@ class CameraTrackRenderer:
         )
         tracked_cam_mv = _opencv_opengl_transform @ \
             _setup_view(tracked_cam_pose.t_vec, tracked_cam_pose.r_mat) @ \
-            _opencv_opengl_transform                                        # camera in OpenCV coordinates
-                                                                            # -> conversion needed
+            _opencv_opengl_transform                           # camera in OpenCV coordinates -> conversion needed
         tracked_cam_mvp = tracked_cam_p @ np.linalg.inv(tracked_cam_mv)
 
         self._render_cam_frustum(
             mvp @ tracked_cam_mv @ np.linalg.inv(tracked_cam_p)
         )
-        self._render_points(mvp @ _opencv_opengl_transform)    # point cloud in OpenCV coordinates
-        self._render_cam_track(mvp @ _opencv_opengl_transform) # track in OpenCV coordinates
+        self._render_points(mvp @ _opencv_opengl_transform)     # point cloud in OpenCV coordinates
+        self._render_cam_track(mvp @ _opencv_opengl_transform)  # track in OpenCV coordinates
         self._render_cam(
-            mvp @ tracked_cam_mv,                              # camera model in OpenGL coordinates
-            tracked_cam_mvp @ _opencv_opengl_transform         # point cloud in OpenCV coordinates
+            mvp @ tracked_cam_mv,                               # camera model in OpenGL coordinates
+            tracked_cam_mvp @ _opencv_opengl_transform          # point cloud in OpenCV coordinates
         )
 
         GLUT.glutSwapBuffers()

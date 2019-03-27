@@ -177,7 +177,8 @@ def _calc_reprojection_error_mask(points3d, points2d_1, points2d_2,
 def triangulate_correspondences(correspondences: Correspondences,
                                 view_mat_1: np.ndarray, view_mat_2: np.ndarray,
                                 intrinsic_mat: np.ndarray,
-                                parameters: TriangulationParameters) \
+                                parameters: TriangulationParameters,
+                                mask: np.ndarray=None) \
         -> Tuple[np.ndarray, np.ndarray]:
     points2d_1 = correspondences.points_1
     points2d_2 = correspondences.points_2
@@ -215,7 +216,10 @@ def triangulate_correspondences(correspondences: Correspondences,
         points3d,
         parameters.min_triangulation_angle_deg
     )
-    common_mask = reprojection_error_mask & z_mask_1 & z_mask_2 & angle_mask
+    if mask is not None:
+        common_mask = mask & reprojection_error_mask & z_mask_1 & z_mask_2 & angle_mask
+    else:
+        common_mask = reprojection_error_mask & z_mask_1 & z_mask_2 & angle_mask
 
     return points3d[common_mask], correspondences.ids[common_mask]
 
@@ -301,6 +305,14 @@ class PointCloudBuilder:
         self._points = self.points[sorting_idx].reshape(-1, 3)
         if self.colors is not None:
             self._colors = self.colors[sorting_idx].reshape(-1, 3)
+
+    def remove_ids(self, ids):
+        ids = ids.reshape(-1, 1)
+        _, (idx_1, idx_2) = snp.intersect(self.ids.flatten(), ids.flatten(),
+                                          indices=True)
+        self._ids = np.delete(self._ids, idx_1, axis=0)
+        self._points = np.delete(self._points, idx_1, axis=0)
+        self._sort_data()
 
 
 def _to_int_tuple(point):
