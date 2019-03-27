@@ -37,7 +37,7 @@ class TrackingMode:
 
 initialization_frames = 500
 
-default_essential_mat_params = dict(method=cv2.RANSAC, prob=0.999, threshold=1)
+default_essential_mat_params = dict(method=cv2.RANSAC, prob=0.9999, threshold=1)
 default_solve_pnp_ransac_params = dict(distCoeffs=None, flags=cv2.SOLVEPNP_EPNP)
 
 tracking_modes = [
