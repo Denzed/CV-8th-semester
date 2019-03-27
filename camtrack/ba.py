@@ -12,16 +12,18 @@ from corners import FrameCorners
 
 
 def bundle_adjustment_sparsity(frame_count: int, point_count: int, frame_ids, point_ids):
-    m = frame_count
-    n = frame_count * 9 + point_count * 3
+    n = frame_count * 6 + point_count * 3
+    m = 2 * point_ids.shape[0]
     mat = lil_matrix((m, n), dtype=int)
 
-    for i in range(frame_count):
-        for s in range(9):
-            mat[i, frame_ids * 9 + s] = 1
+    i = np.arange(point_ids.size)
+    for s in range(6):
+        mat[2 * i, frame_ids * 6 + s] = 1
+        mat[2 * i + 1, frame_ids * 6 + s] = 1
 
-        for s in range(3):
-            mat[i, frame_count * 9 + point_ids * 3 + s] = 1
+    for s in range(3):
+        mat[2 * i, frame_count * 6 + point_ids * 3 + s] = 1
+        mat[2 * i + 1, frame_count * 6 + point_ids * 3 + s] = 1
 
     return mat
 
@@ -33,22 +35,18 @@ def view_mat3x4_to_array(view_mat: np.ndarray) -> np.ndarray:
     return np.hstack((r_vec.ravel(), pose.t_vec.ravel())).ravel()
 
 
-def to_x(intrinsic_params: np.ndarray,
-         view_mats: List[np.ndarray],
-         pc_builder: PointCloudBuilder) -> np.ndarray:
+def to_x(view_mats: List[np.ndarray],
+         points3d: np.ndarray) -> np.ndarray:
     res = np.hstack((
-        np.array([
-            np.hstack((view_mat3x4_to_array(view), intrinsic_params))
-            for view in view_mats
-        ]).ravel(),
-        pc_builder.points.ravel()
+        np.array([view_mat3x4_to_array(view) for view in view_mats]).ravel(),
+        points3d.ravel()
     )).ravel()
     return res
 
 
 def from_x(x, frame_cnt, point_cnt):
-    camera_params = x[:frame_cnt * 9].reshape((frame_cnt, 9))
-    points3d = x[frame_cnt * 9:].reshape((point_cnt, 3))
+    camera_params = x[:frame_cnt * 6].reshape((frame_cnt, 6))
+    points3d = x[frame_cnt * 6:].reshape((point_cnt, 3))
 
     views = []
     for cam in camera_params:
@@ -71,32 +69,31 @@ def make_fun(
         views = np.array(views)
 
         points3d = to_homogeneous(points3d)
-        points2d_ = np.array([
-            intrinsic_mat @ view @ point for view, point in zip(views[frame_ids], points3d[point_ids])
-        ])
+        points2d_ = intrinsic_mat @ np.array([
+            view @ point for view, point in zip(views[frame_ids], points3d[point_ids])
+        ]).T
         points2d_ /= points2d_[[2]]
 
-        return (points2d - points2d_.T[:2].T).ravel()
+        res = (points2d - points2d_[:2].T).ravel()
+        return res
 
     return fun
 
 
 def run_bundle_adjustment(intrinsic_mat: np.ndarray,
                           corner_list: List[FrameCorners],
-                          max_inlier_reprojection_error: float,
                           view_mats: List[np.ndarray],
                           pc_builder: PointCloudBuilder) -> List[np.ndarray]:
+    print("Running bundle adjustment...")
+
     frame_cnt = len(view_mats)
     point_cnt = pc_builder.points.shape[0]
-
-    intrinsic_params = np.array([intrinsic_mat[0][0], 0, 0])
-    x0 = to_x(intrinsic_params, view_mats, pc_builder)
 
     frame_ids = []
     point_ids = []
     points2d = []
 
-    for frame, corners in enumerate(corner_list):
+    for frame, corners in enumerate(corner_list[:frame_cnt]):
         _, (indices_1, indices_2) = snp.intersect(corners.ids.flatten(), pc_builder.ids.flatten(), indices=True)
 
         frame_point_cnt = indices_1.shape[0]
@@ -104,25 +101,35 @@ def run_bundle_adjustment(intrinsic_mat: np.ndarray,
         point_ids += indices_2.tolist()
         points2d += corners.points[indices_1].tolist()
 
+    if not len(frame_ids):
+        print("Running bundle adjustment... Cancelled! Empty task detected")
+        return view_mats
+
     frame_ids = np.array(frame_ids)
     point_ids = np.array(point_ids)
     points2d = np.array(points2d)
 
-    fun = make_fun(intrinsic_mat, frame_cnt, point_cnt, frame_ids, point_ids, points2d)
-
     mat = bundle_adjustment_sparsity(frame_cnt, point_cnt, frame_ids, point_ids)
 
-    print(x0.shape, fun(x0).shape, mat.shape)
+    x0 = to_x(view_mats, pc_builder.points)
+
+    fun = make_fun(intrinsic_mat, frame_cnt, point_cnt, frame_ids, point_ids, points2d)
 
     res_x = least_squares(fun, x0,
                           jac_sparsity=mat,
-                          verbose=2,
+                          verbose=0,
                           x_scale='jac',
-                          ftol=max_inlier_reprojection_error,
-                          method='trf') # TODO: from point count
+                          method="trf")
 
-    res_view_mats, res_pc = from_x(res_x, frame_cnt, point_cnt)
+    if res_x.success:
+        res_view_mats, res_pc = from_x(res_x.x, frame_cnt, point_cnt)
 
-    pc_builder.update_points(pc_builder.ids, res_pc)
+        pc_builder.update_points(pc_builder.ids, res_pc)
 
-    return res_view_mats
+        print("Running bundle adjustment... Success!")
+
+        return res_view_mats
+    else:
+        print("Running bundle adjustment... Failed! Nothing changed")
+
+        return view_mats
